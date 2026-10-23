@@ -1,0 +1,83 @@
+
+# ==========================================
+# StudyBuddy - Android Kotlin Project
+# Git Ignore Configuration
+# ==========================================
+
+# Gradle
+.gradle/
+.gradle
+**/build/
+build/
+.kotlin/
+
+# Android local configuration
+local.properties
+/captures/
+.externalNativeBuild/
+.cxx/
+
+# Android Studio / IntelliJ IDEA
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Visual Studio Code
+.vscode/
+
+# Operating System Files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Log and temporary files
+*.log
+*.tmp
+*.temp
+*.bak
+*.swp
+*~
+
+# Android build outputs
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+*.hprof
+
+# Native build files
+.externalNativeBuild/
+.cxx/
+
+# Signing keys
+*.jks
+*.keystore
+*.p12
+*.pem
+*.key
+
+# Environment and private configuration
+.env
+.env.*
+*.env
+
+# Firebase Admin SDK credentials
+*serviceAccountKey*.json
+*service-account*.json
+
+# Firebase configuration
+google-services.json
+
+# Test reports and generated files
+**/test-results/
+**/reports/
+**/outputs/
+
+# Kotlin / Java temporary files
+*.jar.tmp
+*.kotlin_module
+
+# Crash reports
+crashlytics-build.properties
