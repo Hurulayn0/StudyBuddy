@@ -1,6 +1,24 @@
 package com.studybuddy.app
 
 import android.os.Bundle
+import android.Manifest
+import android.app.Notification
+import android.app.AlarmManager
+import android.app.DatePickerDialog
+import android.app.TimePickerDialog
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import android.widget.Toast
+import java.util.Calendar
+import java.text.SimpleDateFormat
+import java.util.Locale
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.BorderStroke
@@ -22,6 +40,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalContext
 import com.studybuddy.app.ui.theme.StudyBuddyTheme
 
 private val Purple = Color(0xFF6754A7)
@@ -75,11 +94,11 @@ private fun StudyBuddyApp() {
                             val i = tasks.indexOfFirst { it.id == id }
                             if (i >= 0) tasks[i] = tasks[i].copy(done = checked)
                         }, onDelete = { id -> tasks.removeAll { it.id == id } })
-                        "Notifications" -> NotificationsPage(notices)
-                        "Admin" -> AdminPage { title, message, kind ->
+                        "Notifications" -> NotificationsPage(notices, tasks)
+                        "Admin" -> AdminPage(onSend = { title, message, kind ->
                             notices.add(0, Notice(title, message, kind))
                             screen = "Notifications"
-                        }
+                        })
                     }
                 }
                 NavigationBar(containerColor = Paper, tonalElevation = 0.dp) {
@@ -253,12 +272,13 @@ private fun TasksPage(tasks: List<StudyTask>, onAdd: (String, String) -> Unit, o
 }
 
 @Composable
-private fun NotificationsPage(notices: List<Notice>) {
-    Column(Modifier.fillMaxSize().padding(20.dp)) {
+private fun NotificationsPage(notices: List<Notice>, tasks: List<StudyTask>) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp)) {
         Spacer(Modifier.height(16.dp))
-        PageTitle("Notifications 🔔", "Important reminders in one place.")
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(13.dp)) {
-            items(notices) { notice ->
+        PageTitle("Notifications 🔔", "Schedule reminders and read announcements.")
+        TaskReminderCard(tasks)
+        Spacer(Modifier.height(15.dp))
+        notices.forEach { notice ->
                 PrettyCard {
                     Surface(color = if (notice.kind == "Exams") Pink else Soft, shape = RoundedCornerShape(10.dp)) {
                         Text(notice.kind, color = Purple, modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp), fontSize = 11.sp)
@@ -268,8 +288,121 @@ private fun NotificationsPage(notices: List<Notice>) {
                     Spacer(Modifier.height(5.dp))
                     Text(notice.message, color = Color.DarkGray, fontSize = 14.sp)
                 }
+                Spacer(Modifier.height(13.dp))
+        }
+    }
+}
+
+// The user chooses a real task from the Tasks screen before testing the local notification.
+@Composable
+private fun TaskReminderCard(tasks: List<StudyTask>) {
+    val context = LocalContext.current
+    val activeTasks = tasks.filterNot { it.done }
+    var selectedTaskId by remember { mutableStateOf<Int?>(null) }
+    var expanded by remember { mutableStateOf(false) }
+    val selectedTask = activeTasks.firstOrNull { it.id == selectedTaskId }
+    var chosenTime by remember {
+        mutableLongStateOf(Calendar.getInstance().apply { add(Calendar.MINUTE, 10) }.timeInMillis)
+    }
+    val formattedTime = remember(chosenTime) {
+        SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault()).format(chosenTime)
+    }
+    var pendingSchedule by remember { mutableStateOf(false) }
+
+    fun trySchedule() {
+        val task = selectedTask ?: return
+        if (chosenTime <= System.currentTimeMillis()) {
+            Toast.makeText(context, "Choose a future date and time", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val result = scheduleTaskNotification(context, task, chosenTime)
+        Toast.makeText(
+            context,
+            if (result) "Reminder scheduled for $formattedTime"
+            else "Allow Alarms & reminders, then tap Schedule again",
+            Toast.LENGTH_LONG
+        ).show()
+    }
+
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted && pendingSchedule) trySchedule()
+        else if (!granted) Toast.makeText(context, "Allow notifications in Settings", Toast.LENGTH_LONG).show()
+        pendingSchedule = false
+    }
+
+    PrettyCard {
+        Text("Task Reminder", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Dark)
+        Spacer(Modifier.height(8.dp))
+        Text("Choose a task, date and time for your reminder.", color = Color.Gray, fontSize = 13.sp)
+        Spacer(Modifier.height(10.dp))
+        Box {
+            OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
+                Text(selectedTask?.let { "${it.name} · ${it.course}" } ?: "Choose task ▼")
+            }
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                activeTasks.forEach { task ->
+                    DropdownMenuItem(
+                        text = { Text("${task.name} · ${task.course}") },
+                        onClick = { selectedTaskId = task.id; expanded = false }
+                    )
+                }
             }
         }
+        if (activeTasks.isEmpty()) {
+            Text("Add a task in the Tasks tab first.", color = Purple, fontSize = 12.sp)
+        }
+        Spacer(Modifier.height(12.dp))
+        Text("Reminder: $formattedTime", color = Dark)
+        Spacer(Modifier.height(8.dp))
+        OutlinedButton(
+            modifier = Modifier.fillMaxWidth(),
+            onClick = {
+                val c = Calendar.getInstance().apply { timeInMillis = chosenTime }
+                DatePickerDialog(context, { _, year, month, day ->
+                    val selected = Calendar.getInstance().apply { timeInMillis = chosenTime }
+                    selected.set(Calendar.YEAR, year)
+                    selected.set(Calendar.MONTH, month)
+                    selected.set(Calendar.DAY_OF_MONTH, day)
+                    chosenTime = selected.timeInMillis
+                }, c.get(Calendar.YEAR), c.get(Calendar.MONTH), c.get(Calendar.DAY_OF_MONTH)).show()
+            }
+        ) { Text("📅 Select Date") }
+        OutlinedButton(
+            modifier = Modifier.fillMaxWidth(),
+            onClick = {
+                val c = Calendar.getInstance().apply { timeInMillis = chosenTime }
+                TimePickerDialog(context, { _, hour, minute ->
+                    val selected = Calendar.getInstance().apply { timeInMillis = chosenTime }
+                    selected.set(Calendar.HOUR_OF_DAY, hour)
+                    selected.set(Calendar.MINUTE, minute)
+                    selected.set(Calendar.SECOND, 0)
+                    selected.set(Calendar.MILLISECOND, 0)
+                    chosenTime = selected.timeInMillis
+                }, c.get(Calendar.HOUR_OF_DAY), c.get(Calendar.MINUTE), true).show()
+            }
+        ) { Text("🕒 Select Time") }
+        Spacer(Modifier.height(12.dp))
+        Button(
+            enabled = selectedTask != null && chosenTime > System.currentTimeMillis(),
+            onClick = {
+                if (Build.VERSION.SDK_INT >= 33 &&
+                    context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+                ) {
+                    pendingSchedule = true
+                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                } else trySchedule()
+            },
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.buttonColors(containerColor = Purple),
+            shape = RoundedCornerShape(15.dp)
+        ) { Text("🔔 Schedule Notification") }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "If Android asks for Alarms & reminders access, enable it and tap Schedule again.",
+            color = Color.Gray, fontSize = 11.sp
+        )
     }
 }
 
@@ -278,9 +411,10 @@ private fun AdminPage(onSend: (String, String, String) -> Unit) {
     var title by remember { mutableStateOf("") }
     var message by remember { mutableStateOf("") }
     var kind by remember { mutableStateOf("General") }
+
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp)) {
         Spacer(Modifier.height(16.dp))
-        PageTitle("Admin Panel ✉", "Create a sample class announcement.")
+        PageTitle("Admin Panel ✉", "Teacher announcement preview.")
         PrettyCard {
             Text("New announcement", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Dark)
             Spacer(Modifier.height(15.dp))
@@ -303,7 +437,84 @@ private fun AdminPage(onSend: (String, String, String) -> Unit) {
                 modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(15.dp)
             ) { Text("Preview Announcement →") }
         }
-        Spacer(Modifier.height(15.dp))
-        Text("Prototype only: this adds a message inside the app. FCM sending, authentication, and server-side admin permissions will be implemented later.", fontSize = 12.sp, color = Color.Gray)
+        Spacer(Modifier.height(12.dp))
+        Text("Demo: announcements are in-app only. Teacher-to-student FCM delivery comes later.", fontSize = 12.sp, color = Color.Gray)
     }
+}
+
+private fun scheduleTaskNotification(context: Context, task: StudyTask, whenMillis: Long): Boolean {
+    val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+
+    if (whenMillis <= System.currentTimeMillis()) return false
+
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+        !alarmManager.canScheduleExactAlarms()
+    ) {
+        context.startActivity(
+            Intent(
+                android.provider.Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
+                android.net.Uri.parse("package:${context.packageName}")
+            )
+        )
+        return false
+    }
+
+    val requestCode = (System.currentTimeMillis() % 2000000000L).toInt()
+    val broadcastIntent = Intent(context, TaskAlarmReceiver::class.java).apply {
+        putExtra("task_name", task.name)
+        putExtra("task_course", task.course)
+        putExtra("notification_id", requestCode)
+        putExtra("scheduled_time", whenMillis)
+    }
+    val broadcastPendingIntent = PendingIntent.getBroadcast(
+        context, requestCode, broadcastIntent,
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    )
+    val showPendingIntent = PendingIntent.getActivity(
+        context, requestCode,
+        Intent(context, MainActivity::class.java),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    )
+
+    alarmManager.setAlarmClock(
+        AlarmManager.AlarmClockInfo(whenMillis, showPendingIntent),
+        broadcastPendingIntent
+    )
+    return true
+}
+
+// This is a LOCAL Android notification demo, not a remote FCM push message.
+private fun showTaskReminderNotification(context: Context, task: StudyTask) {
+    val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+    val channelId = "studybuddy_reminders"
+
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        manager.createNotificationChannel(
+            NotificationChannel(
+                channelId,
+                "Study Reminders",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply { description = "Reminders about selected homework and exams" }
+        )
+    }
+
+    val intent = Intent(context, MainActivity::class.java)
+    val pendingIntent = PendingIntent.getActivity(
+        context,
+        0,
+        intent,
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    )
+
+    val detail = "${task.name} · ${task.course.ifBlank { "General" }}"
+    val notification = Notification.Builder(context, channelId)
+        .setSmallIcon(android.R.drawable.ic_dialog_info)
+        .setContentTitle("StudyBuddy • Task Reminder")
+        .setContentText(detail)
+        .setStyle(Notification.BigTextStyle().bigText("Your selected task: $detail"))
+        .setContentIntent(pendingIntent)
+        .setAutoCancel(true)
+        .build()
+
+    manager.notify(task.id + 1000, notification)
 }
