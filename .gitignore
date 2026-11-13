@@ -81,3 +81,6 @@ google-services.json
 
 # Crash reports
 crashlytics-build.properties
+
+# Local Firebase verification screenshot
+/firebase-connection-proof.jpg
